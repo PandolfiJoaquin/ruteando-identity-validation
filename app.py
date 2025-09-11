@@ -24,6 +24,7 @@ SYSTEM_INSTRUCTION = (
     "{match: boolean, confidence: 0..1, notes: string[]}."
 )
 BOOTSTRAP_PROMPT = "Session bootstrap"
+THRESHOLD = 0.35
 
 # --- helpers ---------------------------------------------------------------
 
@@ -201,8 +202,8 @@ def verify_with_deepface(img1: Image.Image, img2: Image.Image, threshold: float)
         # va entre -1 y 1
         sim = float(v1.dot(v2) / ((np.linalg.norm(v1) + 1e-8) * (np.linalg.norm(v2) + 1e-8)))
 
-        decision = "ACCEPT" if sim >= threshold else "REJECT"
-        reason = f"Cosine similarity = {sim:.3f} (threshold {threshold:.2f})"
+        decision = "ACCEPT" if sim >= THRESHOLD else "REJECT"
+        reason = f"Cosine similarity = {sim:.3f} (threshold {THRESHOLD:.2f})"
         responses.append(VerifyResponse(decision=decision, reason=reason, scores=[sim], model=model))
     return responses
 
@@ -211,7 +212,6 @@ class Request(BaseModel):
     dni_uri: str
     facepic_uri: str
     storage: Literal["bucket", "local"] = "local"
-    local_threshold: float = 0.40  # only used if storage=localA
 
 @app.post("/verify", response_model=VerifyResponse)
 async def verify(req: Request):
@@ -252,7 +252,7 @@ def agg_responses(responses: List[VerifyResponse]) -> VerifyResponse:
     #         model=",".join([r.model for r in rejects]),
     #     )
     
-    if sum(scores)/len(scores) < 0.35:
+    if sum(scores)/len(scores) < THRESHOLD:
         return VerifyResponse(
             decision="REJECT",
             reason=f"Low average similarity ({sum(scores)/len(scores):.3f})",
