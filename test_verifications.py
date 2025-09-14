@@ -28,7 +28,7 @@ def test_verifications():
         verification_result = _verify(s1, s2)
         color = choose_color(expected, verification_result)
         print(f"{color}{verification_result.scores}{RESET}" if verification_result.scores else "-")
-        results.append((s1, s2, expected, verification_result.decision, verification_result.scores, verification_result.reason))
+        results.append((s1, s2, expected, verification_result.result, verification_result.scores, verification_result.reason))
     
     postprocess_results(results)
 

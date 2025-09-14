@@ -49,10 +49,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="ID/Selfie Verification API", version="1.0", lifespan=lifespan)
 
 class VerifyResponse(BaseModel):
-    decision: Literal["ACCEPT", "REJECT", "IMAGE_UNCLEAR"]
+    result: Literal["ACCEPT", "REJECT", "IMAGE_UNCLEAR"]
     reason: str
     scores: List[float] = []
-    model: str 
+    models: str 
 
 BASE_PATH = "/home/joaco/Desktop/tutoria-piñeiro/ruteando/ruteando-validator/dataset/"
 PROMPT = """
@@ -124,7 +124,7 @@ def verify_with_gemini(dni_uri: str, face_uri: str) -> VerifyResponse:
             if line.upper().startswith("REASON:"):
                 reason = line.split(":", 1)[1].strip()
 
-        return VerifyResponse(decision=decision, reason=reason, model='gemini')
+        return VerifyResponse(result=decision, reason=reason, models='gemini')
     except Exception as e:
         print(f"Gemini API error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error. issue with gemini api")
@@ -171,7 +171,7 @@ def verify_with_openai(img1: Image.Image, img2: Image.Image) -> VerifyResponse:
         if line.upper().startswith("REASON:"):
             reason = line.split(":", 1)[1].strip()
 
-    return VerifyResponse(decision=decision, reason=reason)
+    return VerifyResponse(result=decision, reason=reason)
 
 # ---------- Local engine (embeddings + cosine) ----------
 def verify_with_deepface(img1: Image.Image, img2: Image.Image, threshold: float) -> List[VerifyResponse]:
@@ -194,7 +194,7 @@ def verify_with_deepface(img1: Image.Image, img2: Image.Image, threshold: float)
             emb1 = DeepFace.represent(img_path=np.array(img1), model_name=model, enforce_detection=True)[0]["embedding"]
             emb2 = DeepFace.represent(img_path=np.array(img2), model_name=model, enforce_detection=True)[0]["embedding"]
         except Exception as e:
-            responses.append(VerifyResponse(decision="IMAGE_UNCLEAR", reason=f"Face not found / local engine error: {e}", model=model))
+            responses.append(VerifyResponse(result="IMAGE_UNCLEAR", reason=f"Face not found / local engine error: {e}", models=model))
             continue
         import numpy as np
         v1 = np.array(emb1, dtype="float32")
@@ -204,7 +204,7 @@ def verify_with_deepface(img1: Image.Image, img2: Image.Image, threshold: float)
 
         decision = "ACCEPT" if sim >= THRESHOLD else "REJECT"
         reason = f"Cosine similarity = {sim:.3f} (threshold {THRESHOLD:.2f})"
-        responses.append(VerifyResponse(decision=decision, reason=reason, scores=[sim], model=model))
+        responses.append(VerifyResponse(result=decision, reason=reason, scores=[sim], models=model))
     return responses
 
 
@@ -231,15 +231,15 @@ async def verify(req: Request):
         raise HTTPException(status_code=400, detail="Unknown storage. storage should be one of [bucket, local]")
 
 def agg_responses(responses: List[VerifyResponse]) -> VerifyResponse: 
-    images_unclear = list(filter(lambda r: r.decision == "IMAGE_UNCLEAR", responses))
+    images_unclear = list(filter(lambda r: r.result == "IMAGE_UNCLEAR", responses))
     scores = flatmap([r.scores for r in responses])
     if len(images_unclear) > 1:
-        reasons = "; ".join([f"{r.model}: {r.reason}" for r in images_unclear])
+        reasons = "; ".join([f"{r.models}: {r.reason}" for r in images_unclear])
         return VerifyResponse(
-            decision="IMAGE_UNCLEAR",
+            result="IMAGE_UNCLEAR",
             reason=f"Image unclear for the following models: {reasons}",
             scores=scores,
-            model=",".join([r.model for r in images_unclear]),
+            models=",".join([r.models for r in images_unclear]),
         )
     
     # rejects = list(filter(lambda r: r.decision == "REJECT", responses))
@@ -254,36 +254,32 @@ def agg_responses(responses: List[VerifyResponse]) -> VerifyResponse:
     
     if sum(scores)/len(scores) < THRESHOLD:
         return VerifyResponse(
-            decision="REJECT",
+            result="REJECT",
             reason=f"Low average similarity ({sum(scores)/len(scores):.3f})",
             scores=scores,
-            model=",".join([r.model for r in responses]),
+            models=",".join([r.models for r in responses]),
         )
 
     return VerifyResponse(
-        decision="ACCEPT",
+        result="ACCEPT",
         reason="Good enough average",
         scores=scores,
-        model=",".join([r.model for r in responses]),
+        models=",".join([r.models for r in responses]),
     )
 
 
 def _verify(dni_uri: str, facepic_uri: str) -> VerifyResponse:
-    dni_image = pil_from_local_storage(dni_uri)
-    face_image = pil_from_local_storage(facepic_uri)
+    try:
+        dni_image = pil_from_local_storage(dni_uri)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail="dni picture not found")
+
+    try:
+        face_image = pil_from_local_storage(facepic_uri)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail="face picture not found")
+
     responses = verify_with_deepface(dni_image, face_image, 0.40)
 
     return agg_responses(responses)
     # return verify_with_gemini(dni_uri, facepic_uri)
-    # local_result = verify_with_local(dni, facepic, threshold=float(req.local_threshold))
-    # openai_result = verify_with_openai(dni, facepic)
-
-    # if local_result and openai_result:
-    #     if local_result.decision == "ACCEPT" and openai_result.decision == "ACCEPT":
-    #         return VerifyResponse(decision="ACCEPT", reason="Both engines ACCEPT", score=local_result.score)
-    #     elif local_result.decision == "REJECT" and openai_result.decision == "REJECT":
-    #         return VerifyResponse(decision="REJECT", reason="Both engines REJECT", score=local_result.score)
-    #     elif local_result.decision == "ACCEPT" and openai_result.decision == "REJECT":
-    #         return VerifyResponse(decision="REJECT", reason="OpenAI REJECTs, Local ACCEPTs", score=local_result.score)
-    #     else:
-    #         return VerifyResponse(decision="REJECT", reason="Local REJECTs, OpenAI ACCEPTs", score=local_result.score)
