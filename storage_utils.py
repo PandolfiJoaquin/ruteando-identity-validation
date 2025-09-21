@@ -15,12 +15,11 @@ def init_firebase_admin(
     """
     Initialize firebase_admin once per process. 
     """
-    if not firebase_admin._apps:
-        if not service_account_json:
-            raise ValueError("service_account_json must be provided.")
+    if not service_account_json:
+        raise ValueError("service_account_json must be provided.")
 
-        cred = credentials.Certificate(service_account_json)
-        firebase_admin.initialize_app(cred, {"storageBucket": bucket_name} if bucket_name else None)
+    cred = credentials.Certificate(service_account_json)
+    firebase_admin.initialize_app(cred, {"storageBucket": bucket_name} if bucket_name else None)
 
 
 def _parse_gs_uri(gs_uri: str) -> tuple[Optional[str], str]:

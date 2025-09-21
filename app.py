@@ -6,6 +6,9 @@ import io
 import os
 from typing import Literal, List, Dict
 
+import numpy as np
+from deepface import DeepFace
+
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -189,8 +192,7 @@ def verify_with_deepface(dni_img: Image.Image, face_img: Image.Image) -> List[Ve
     Callers should ensure one is a selfie and one is an ID, or accept that
     two ID crops of the same photo will 'match'.
     """
-    import numpy as np
-    from deepface import DeepFace  # pip install deepface==0.0.93
+    
     responses = []
     models = [
         "VGG-Face", "Facenet", "Facenet512", 
@@ -284,8 +286,8 @@ def _verify(dni_uri: str, facepic_uri: str, bucket: str) -> VerifyResponse:
             raise HTTPException(status_code=404, detail="face picture not found")
     else:
         try:
-            dni_image = load_image_from_firebase_admin(dni_uri)
-            face_image = load_image_from_firebase_admin(facepic_uri)
+            dni_image = load_image_from_firebase_admin(dni_uri, bucket)
+            face_image = load_image_from_firebase_admin(facepic_uri, bucket)
         except Exception as e:
             raise HTTPException(status_code=404, detail=f"Error loading images: {e}")
 
