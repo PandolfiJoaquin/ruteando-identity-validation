@@ -1,0 +1,9 @@
+services:
+  face-validator:
+    build: .
+    container_name: ruteando-validator
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+
