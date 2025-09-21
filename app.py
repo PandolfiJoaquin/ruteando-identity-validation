@@ -11,6 +11,7 @@ from deepface import DeepFace
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import JSONResponse
+from openai import InternalServerError
 from pydantic import BaseModel
 from PIL import Image
 
@@ -59,6 +60,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ID/Selfie Verification API", version="1.0", lifespan=lifespan)
 
+############################################################
+# Identity
+############################################################
 class VerifyResponse(BaseModel):
     result: Literal["ACCEPT", "REJECT", "IMAGE_UNCLEAR"]
     reason: str
@@ -66,7 +70,7 @@ class VerifyResponse(BaseModel):
     models: str 
 
 BASE_PATH = "/home/joaco/Desktop/tutoria-piñeiro/ruteando/ruteando-validator/dataset/"
-PROMPT = """
+IDENTITY_VALIDATION_PROMPT = """
     Act as a border agent.
     You will receive two images: they may be (a) an ID (Argentine DNI) and a selfie,
     (b) both sides of an ID, or (c) unrelated.
@@ -80,6 +84,26 @@ PROMPT = """
     Decision: <ACCEPT|REJECT>
     Reason: <one sentence>
 """
+
+VEHICLE_VALIDATION_PROMPT = """
+    You are a vehicle registration validator.
+    You will receive an image of a vehicle and a text description of the vehicle from its registration.
+    Your task is to determine if the vehicle in the image matches the description provided.
+    The description may include details such as make, model, color, and any distinctive features.
+    You don't need to be super rigorous, but you should be able to identify clear mismatches, pictures that 
+    don't show a vehicle, or images that are too unclear to make a judgment (less than 30% of the vehicle visible, extreme blur, etc).
+
+    Rules:
+    1) If the vehicle in the image clearly matches the description, output:
+    Decision: ACCEPT | Reason: Matches.
+    2) If the vehicle in the image does not match the description, output:
+    Decision: REJECT | Reason: short justification.
+    3) If the image is unclear or does not show a vehicle, output:
+    Decision: IMAGE_UNCLEAR | Reason: short justification.
+    Return ONLY:
+    Decision: <ACCEPT|REJECT|IMAGE_UNCLEAR>
+    Reason: <one sentence>"""
+
 # ---------- utilities ---------
 
 # def pil_from_bucket(uri: str) -> Image.Image:
@@ -104,9 +128,7 @@ def to_base64_data_url(img: Image.Image) -> str:
 def flatmap(lst : List[List]) -> List:
     return [item for sublist in lst for item in sublist]
 
-
-def verify_with_gemini(dni_uri: str, face_uri: str) -> VerifyResponse:
-    
+def verify_identity_with_gemini(dni_uri: str, face_uri: str) -> VerifyResponse:
     with open(BASE_PATH + dni_uri, "rb") as f:
         dni_data = f.read()
     with open(BASE_PATH + face_uri, "rb") as f:
@@ -120,7 +142,7 @@ def verify_with_gemini(dni_uri: str, face_uri: str) -> VerifyResponse:
             contents=[{
                 "role": "user",
                 "parts": [
-                    {"text": PROMPT},
+                    {"text": IDENTITY_VALIDATION_PROMPT},
                     face_part,
                     dni_part
                 ]
@@ -159,7 +181,7 @@ def verify_with_openai(img1: Image.Image, img2: Image.Image) -> VerifyResponse:
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": PROMPT},
+                {"type": "text", "text": IDENTITY_VALIDATION_PROMPT},
                 {"type": "image_url", "image_url": {"url": to_base64_data_url(img1)}},
                 {"type": "image_url", "image_url": {"url": to_base64_data_url(img2)}},
             ],
@@ -294,4 +316,66 @@ def _verify(dni_uri: str, facepic_uri: str, bucket: str) -> VerifyResponse:
     responses = verify_with_deepface(dni_image, face_image)
 
     return agg_responses(responses)
-    # return verify_with_gemini(dni_uri, facepic_uri)
+############################################################
+# VEHICLE
+############################################################
+
+class VehicleRequest(BaseModel):
+    vehicle_uri: str
+    vehicle_description: str
+    bucket: str
+
+class VehicleResponse(BaseModel):
+    result: Literal["ACCEPT", "REJECT", "IMAGE_UNCLEAR"]
+    reason: str
+
+
+
+def verify_vehicle_with_gemini(image: Image, description: str) -> VehicleRequest:
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    image = Image.open(buffer)
+
+    vehicle_part = types.Part.from_bytes(data=buffer.getvalue(), mime_type="image/png")
+    try:
+        response = app.state.genai_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[{
+                "role": "user",
+                "parts": [
+                    {"text": VEHICLE_VALIDATION_PROMPT + "\nVehicle description: " + description},
+                    vehicle_part
+                ]
+            }]
+        )
+
+        text_response = response.text
+        for line in text_response.strip().splitlines():
+            if line.upper().startswith("DECISION:"):
+                val = line.split(":", 1)[1].strip().upper()
+                if val in ["ACCEPT", "REJECT", "IMAGE_UNCLEAR"]:
+                    decision = val
+                else:
+                    raise InternalServerError("Invalid decision")
+            if line.upper().startswith("REASON:"):
+                reason = line.split(":", 1)[1].strip()
+
+        return VehicleResponse(result=decision, reason=reason)
+    except Exception as e:
+        print(f"Gemini API error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error. issue with gemini api")
+@app.post("/verify/vehicle", response_model=VehicleResponse)
+async def verify_vehicle(req: VehicleRequest) -> VehicleResponse:
+    """
+    Verify whether the vehicle in the selfie corresponds to the vehicle in the DNI.
+    Uses OpenAI vision reasoning.
+
+    Returns: {decision, reason, engine, score?}
+    """
+    try:
+        vehicle_image = load_image_from_firebase_admin(req.vehicle_uri, req.bucket)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Error loading images: {e}")
+
+    return verify_vehicle_with_gemini(vehicle_image, req.vehicle_description)
