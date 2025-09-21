@@ -1,4 +1,4 @@
-<img width="1243" height="230" alt="image" src="https://github.com/user-attachments/assets/f87393dc-9b64-4338-b47b-8a125fcbc636" /># Validador de imagenes
+# Validador de imagenes
 
 ## Correr la aplicacion
 
