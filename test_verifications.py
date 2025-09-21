@@ -25,7 +25,7 @@ def test_verifications():
     results= []
     for s1, s2, expected in testcases:
         print("TEST", s1, s2, end='... \t\t')
-        verification_result = _verify(s1, s2)
+        verification_result = _verify(s1, s2, "local")
         color = choose_color(expected, verification_result)
         print(f"{color}{verification_result.scores}{RESET}" if verification_result.scores else "-")
         results.append((s1, s2, expected, verification_result.result, verification_result.scores, verification_result.reason))

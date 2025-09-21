@@ -17,7 +17,7 @@ from fastapi import FastAPI, Depends, Request
 from google import genai
 from google.genai import types
 
-from storage_utils import init_firebase_admin
+from storage_utils import init_firebase_admin, load_image_from_firebase_admin
 
 CACHE_MODEL = "gemini-2.5-flash"
 CACHE_TTL_SECONDS = 3600
@@ -42,7 +42,7 @@ def create_client() -> genai.Client:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    bucket_name = "FIREBASE_BUCKET_NAME"
+    bucket_name = "test"
     init_firebase_admin(
         service_account_json="serviceAccount.json",
         bucket_name=bucket_name,
@@ -182,7 +182,7 @@ def verify_with_openai(img1: Image.Image, img2: Image.Image) -> VerifyResponse:
     return VerifyResponse(result=decision, reason=reason)
 
 # ---------- Local engine (embeddings + cosine) ----------
-def verify_with_deepface(img1: Image.Image, img2: Image.Image, threshold: float) -> List[VerifyResponse]:
+def verify_with_deepface(dni_img: Image.Image, face_img: Image.Image) -> List[VerifyResponse]:
     """
     Local face embeddings + cosine similarity using DeepFace (facenet512 default).
     This engine DOES NOT detect 'both are DNI'—it just compares faces.
@@ -199,10 +199,10 @@ def verify_with_deepface(img1: Image.Image, img2: Image.Image, threshold: float)
     for model in models:
         # Extract embeddings; enforce detect_faces = True to crop the dominant face.
         try:
-            emb1 = DeepFace.represent(img_path=np.array(img1), model_name=model, enforce_detection=True)[0]["embedding"]
-            emb2 = DeepFace.represent(img_path=np.array(img2), model_name=model, enforce_detection=True)[0]["embedding"]
+            emb1 = DeepFace.represent(img_path=np.array(dni_img), model_name=model, enforce_detection=True)[0]["embedding"]
+            emb2 = DeepFace.represent(img_path=np.array(face_img), model_name=model, enforce_detection=True, anti_spoofing=True)[0]["embedding"]
         except Exception as e:
-            responses.append(VerifyResponse(result="IMAGE_UNCLEAR", reason=f"Face not found / local engine error: {e}", models=model))
+            responses.append(VerifyResponse(result="IMAGE_UNCLEAR", reason=f"Face not found / spoofing detected: {e}", models=model))
             continue
         import numpy as np
         v1 = np.array(emb1, dtype="float32")
@@ -219,7 +219,7 @@ def verify_with_deepface(img1: Image.Image, img2: Image.Image, threshold: float)
 class Request(BaseModel):
     dni_uri: str
     facepic_uri: str
-    storage: Literal["bucket", "local"] = "local"
+    bucket: str
 
 @app.post("/verify", response_model=VerifyResponse)
 async def verify(req: Request):
@@ -231,12 +231,7 @@ async def verify(req: Request):
     Returns: {decision, reason, engine, score?}
     """
 
-    if req.storage == "bucket":
-        raise HTTPException(status_code=501, detail="Bucket storage not implemented")
-    elif req.storage == "local":
-        return _verify(req.dni_uri, req.facepic_uri)
-    else:
-        raise HTTPException(status_code=400, detail="Unknown storage. storage should be one of [bucket, local]")
+    return _verify(req.dni_uri, req.facepic_uri, req.bucket)
 
 def agg_responses(responses: List[VerifyResponse]) -> VerifyResponse: 
     images_unclear = list(filter(lambda r: r.result == "IMAGE_UNCLEAR", responses))
@@ -276,18 +271,25 @@ def agg_responses(responses: List[VerifyResponse]) -> VerifyResponse:
     )
 
 
-def _verify(dni_uri: str, facepic_uri: str) -> VerifyResponse:
-    try:
-        dni_image = pil_from_local_storage(dni_uri)
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail="dni picture not found")
+def _verify(dni_uri: str, facepic_uri: str, bucket: str) -> VerifyResponse:
+    if bucket == "local":
+        try:
+            dni_image = pil_from_local_storage(dni_uri)
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail="dni picture not found")
 
-    try:
-        face_image = pil_from_local_storage(facepic_uri)
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail="face picture not found")
+        try:
+            face_image = pil_from_local_storage(facepic_uri)
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail="face picture not found")
+    else:
+        try:
+            dni_image = load_image_from_firebase_admin(dni_uri)
+            face_image = load_image_from_firebase_admin(facepic_uri)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=f"Error loading images: {e}")
 
-    responses = verify_with_deepface(dni_image, face_image, 0.40)
+    responses = verify_with_deepface(dni_image, face_image)
 
     return agg_responses(responses)
     # return verify_with_gemini(dni_uri, facepic_uri)

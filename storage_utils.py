@@ -40,7 +40,7 @@ def _parse_gs_uri(gs_uri: str) -> tuple[Optional[str], str]:
     return None, gs_uri
 
 
-def load_image_from_firebase_admin(gs_uri: str) -> Image.Image:
+def load_image_from_firebase_admin(gs_uri: str, bucket_name: Optional[str] = None) -> Image.Image:
     """
     Downloads an image from Firebase Storage using firebase-admin and returns it as a PIL.Image.
     
@@ -52,15 +52,17 @@ def load_image_from_firebase_admin(gs_uri: str) -> Image.Image:
 
     if bucket_from_uri:
         bucket = storage.bucket(bucket_from_uri)
+        print(f"Using bucket from URI: {bucket_from_uri}")
+    elif bucket_name:
+        bucket = storage.bucket(bucket_name)
+        print(f"Using provided bucket name: {bucket_name}")
     else:
         bucket = storage.bucket()
+        print("Using default bucket from firebase_admin initialization")
+
     blob = bucket.blob(blob_path)
     data = blob.download_as_bytes()
     img = Image.open(BytesIO(data))
-    # Optional: ensure a consistent mode (helps with some formats)
-    try:
-        img.load()  # force actual decoding now
-    except Exception:
-        print("Warning: image decoding failed")
+    img.load()
     return img
 
