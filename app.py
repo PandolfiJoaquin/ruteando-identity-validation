@@ -17,6 +17,8 @@ from fastapi import FastAPI, Depends, Request
 from google import genai
 from google.genai import types
 
+from storage_utils import init_firebase_admin
+
 CACHE_MODEL = "gemini-2.5-flash"
 CACHE_TTL_SECONDS = 3600
 SYSTEM_INSTRUCTION = (
@@ -26,20 +28,26 @@ SYSTEM_INSTRUCTION = (
 BOOTSTRAP_PROMPT = "Session bootstrap"
 THRESHOLD = 0.35
 
-# --- helpers ---------------------------------------------------------------
+
 
 def create_client() -> genai.Client:
+    """
+    This requires GOOGLE env vars to be set:
+        GEMINI_API_KEY
+        GOOGLE_GENAI_USE_VERTEXAI=false
+        GOOGLE_CLOUD_PROJECT
+        GOOGLE_CLOUD_LOCATION
+    """
     return genai.Client(http_options=types.HttpOptions(api_version="v1"))
-
-
-
-# --- lifespan: create once, clean up once ---------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    bucket_name = "FIREBASE_BUCKET_NAME"
+    init_firebase_admin(
+        service_account_json="serviceAccount.json",
+        bucket_name=bucket_name,
+    )
     client = create_client()
-
-    # stash in app.state
     app.state.genai_client = client
     try:
         yield
