@@ -1,0 +1,33 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.log
+
+# Virtual envs
+venv/
+.env
+.env.*
+
+# OS/editor
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Build/test artifacts
+*.egg-info/
+.coverage
+htmlcov/
+.pytest_cache/
+.cache/
+
+# Local files not needed in image
+*.csv

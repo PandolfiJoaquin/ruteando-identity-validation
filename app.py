@@ -221,7 +221,7 @@ def verify_with_deepface(dni_img: Image.Image, face_img: Image.Image) -> List[Ve
         # Extract embeddings; enforce detect_faces = True to crop the dominant face.
         try:
             emb1 = DeepFace.represent(img_path=np.array(dni_img), model_name=model, enforce_detection=True)[0]["embedding"]
-            emb2 = DeepFace.represent(img_path=np.array(face_img), model_name=model, enforce_detection=True, anti_spoofing=True)[0]["embedding"]
+            emb2 = DeepFace.represent(img_path=np.array(face_img), model_name=model, enforce_detection=True, anti_spoofing=False)[0]["embedding"]
         except Exception as e:
             responses.append(VerifyResponse(result="IMAGE_UNCLEAR", reason=f"Face not found / spoofing detected: {e}", models=model))
             continue
@@ -251,7 +251,9 @@ async def verify(req: Request):
     Returns: {decision, reason, engine, score?}
     """
 
-    return _verify(req.dni_uri, req.facepic_uri, req.bucket)
+    result = _verify(req.dni_uri, req.facepic_uri, req.bucket)
+    print(result)
+    return result
 
 def agg_responses(responses: List[VerifyResponse]) -> VerifyResponse: 
     images_unclear = list(filter(lambda r: r.result == "IMAGE_UNCLEAR", responses))
