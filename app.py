@@ -106,9 +106,6 @@ VEHICLE_VALIDATION_PROMPT = """
 
 # ---------- utilities ---------
 
-# def pil_from_bucket(uri: str) -> Image.Image:
-# TODO
-
 def pil_from_local_storage(path: str) -> Image.Image:
     with open(BASE_PATH + path, "rb") as f:
         data = f.read()
@@ -228,7 +225,6 @@ def verify_with_deepface(dni_img: Image.Image, face_img: Image.Image) -> List[Ve
         except Exception as e:
             responses.append(VerifyResponse(result="IMAGE_UNCLEAR", reason=f"Face not found / spoofing detected: {e}", models=model))
             continue
-        import numpy as np
         v1 = np.array(emb1, dtype="float32")
         v2 = np.array(emb2, dtype="float32")
         # va entre -1 y 1
@@ -334,10 +330,10 @@ class VehicleResponse(BaseModel):
 def verify_vehicle_with_gemini(image: Image, description: str) -> VehicleRequest:
 
     buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
+    image.save(buffer, format="JPEG")
     image = Image.open(buffer)
 
-    vehicle_part = types.Part.from_bytes(data=buffer.getvalue(), mime_type="image/png")
+    vehicle_part = types.Part.from_bytes(data=buffer.getvalue(), mime_type="image/jpeg")
     try:
         response = app.state.genai_client.models.generate_content(
             model="gemini-2.5-flash",
