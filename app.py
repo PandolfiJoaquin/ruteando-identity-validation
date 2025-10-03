@@ -31,7 +31,35 @@ SYSTEM_INSTRUCTION = (
 )
 BOOTSTRAP_PROMPT = "Session bootstrap"
 THRESHOLD = 0.35
+DEEPFACE_MODELS = ["Facenet512"]
 
+
+def preload_deepface_models():
+    """Preload DeepFace models to avoid delays on first request"""
+    try:
+        # Create a small dummy image to trigger model loading
+        dummy_img = np.ones((100, 100, 3), dtype=np.uint8) * 128
+        
+        # Use configured models to preload
+        models_to_preload = DEEPFACE_MODELS
+        
+        for model in models_to_preload:
+            try:
+                print(f"Loading {model} model...")
+                DeepFace.represent(img_path=dummy_img, model_name=model, enforce_detection=False)
+                print(f"{model} model loaded successfully")
+            except Exception as e:
+                print(f"Warning: Failed to preload {model} model: {e}")
+                
+        try:
+            print("Preloading face detection backend...")
+            DeepFace.extract_faces(img_path=dummy_img, enforce_detection=False)
+            print("Face detection backend loaded successfully")
+        except Exception as e:
+            print(f"Warning: Failed to preload face detection backend: {e}")
+                
+    except Exception as e:
+        print(f"Warning: Failed to preload DeepFace models: {e}")
 
 
 def create_client() -> genai.Client:
@@ -53,6 +81,15 @@ async def lifespan(app: FastAPI):
     )
     client = create_client()
     app.state.genai_client = client
+    
+    # Preload DeepFace models to avoid first-request delays
+    print("Preloading DeepFace models...")
+    try:
+        preload_deepface_models()
+        print("DeepFace models preloaded successfully")
+    except Exception as e:
+        print(f"Warning: Failed to preload models during startup: {e}")
+    
     try:
         yield
     finally:
@@ -116,7 +153,6 @@ def pil_from_local_storage(path: str) -> Image.Image:
     return img
 
 def to_base64_data_url(img: Image.Image) -> str:
-    """Encode PIL image -> data URL for OpenAI vision input."""
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=92)
     b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
@@ -160,49 +196,6 @@ def verify_identity_with_gemini(dni_uri: str, face_uri: str) -> VerifyResponse:
         raise HTTPException(status_code=500, detail="Internal server error. issue with gemini api")
 
 
-
-def verify_with_openai(img1: Image.Image, img2: Image.Image) -> VerifyResponse:
-    from openai import OpenAI
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
-
-    client = OpenAI(api_key=api_key)
-
-
-    # You can switch to a bigger model if you like (e.g., 'gpt-4o' or 'gpt-4.1')
-    model_name = os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini")
-
-    msg = [
-        {"role": "system", "content": SYSTEM_INSTRUCTION},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": IDENTITY_VALIDATION_PROMPT},
-                {"type": "image_url", "image_url": {"url": to_base64_data_url(img1)}},
-                {"type": "image_url", "image_url": {"url": to_base64_data_url(img2)}},
-            ],
-        },
-    ]
-
-    try:
-        resp = client.chat.completions.create(model=model_name, messages=msg, temperature=0)
-        content = resp.choices[0].message.content.strip()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"OpenAI error: {e}")
-
-    # Simple parse (expects the two-line schema)
-    decision = "REJECT"
-    reason = "Unparseable response"
-    for line in content.splitlines():
-        if line.upper().startswith("DECISION:"):
-            val = line.split(":", 1)[1].strip().upper()
-            decision = "ACCEPT" if "ACCEPT" in val else "REJECT"
-        if line.upper().startswith("REASON:"):
-            reason = line.split(":", 1)[1].strip()
-
-    return VerifyResponse(result=decision, reason=reason)
-
 # ---------- Local engine (embeddings + cosine) ----------
 def verify_with_deepface(dni_img: Image.Image, face_img: Image.Image) -> List[VerifyResponse]:
     """
@@ -213,10 +206,7 @@ def verify_with_deepface(dni_img: Image.Image, face_img: Image.Image) -> List[Ve
     """
     
     responses = []
-    models = [
-        "VGG-Face", "Facenet", "Facenet512", 
-        "ArcFace", "GhostFaceNet"
-    ]
+    models = DEEPFACE_MODELS
     for model in models:
         # Extract embeddings; enforce detect_faces = True to crop the dominant face.
         try:
@@ -319,8 +309,8 @@ def _verify(dni_uri: str, facepic_uri: str, bucket: str) -> VerifyResponse:
 ############################################################
 
 class VehicleRequest(BaseModel):
-    vehicle_uri: str
-    vehicle_description: str
+    img_uri: str
+    description: str
     bucket: str
 
 class VehicleResponse(BaseModel):
@@ -330,12 +320,32 @@ class VehicleResponse(BaseModel):
 
 
 def verify_vehicle_with_gemini(image: Image, description: str) -> VehicleRequest:
-
-    buffer = io.BytesIO()
-    image.save(buffer, format="JPEG")
-    image = Image.open(buffer)
+    try:
+        print("about to save to JPEG")
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG")
+        print("saved to JPEG")
+        print("About to open as PIL")
+        image = Image.open(buffer)
+        print("Opened as PIL")
+    except Exception as e1:
+        print("Error trying to load as JPEG, trying PNG:", e1)
+        try:
+            print("about to save to PNG")
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            print("saved to PNG")
+            print("About to open as PIL")
+            image = Image.open(buffer)
+            print("Opened as PIL")
+        except Exception as e2:
+            print("Error trying to load as PNG:", e2)
+            raise HTTPException(status_code=400, detail=f"Error processing image: {e1}; {e2}")
+        
+        
 
     vehicle_part = types.Part.from_bytes(data=buffer.getvalue(), mime_type="image/jpeg")
+    print("bytes part")
     try:
         response = app.state.genai_client.models.generate_content(
             model="gemini-2.5-flash",
@@ -372,8 +382,8 @@ async def verify_vehicle(req: VehicleRequest) -> VehicleResponse:
     Returns: {decision, reason, engine, score?}
     """
     try:
-        vehicle_image = load_image_from_firebase_admin(req.vehicle_uri, req.bucket)
+        vehicle_image = load_image_from_firebase_admin(req.img_uri, req.bucket)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Error loading images: {e}")
 
-    return verify_vehicle_with_gemini(vehicle_image, req.vehicle_description)
+    return verify_vehicle_with_gemini(vehicle_image, req.description)
